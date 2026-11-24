@@ -1,42 +1,27 @@
-// Main program entry point.
-// Initializes system components and runs the main application loop.
-
-#include "pico/stdlib.h"
-#include "motor.h"
-#include "card_sensor.h"
-#include "keypad.h"
-#include "lcd.h"
-#include "tft.h"
-#include "sd_profiles.h"
-#include "game.h"
-#include "dealer.h"
+// Main program entry point - motor bring-up test.
 
 #include <stdio.h>
 #include "pico/stdlib.h"
+#include "motor.h"
 
 int main(void) {
-    // init serial communication.
     stdio_init_all();
+    sleep_ms(1500); // Give USB serial time to connect
 
-    // init keypad.
-    keypad_init();
+    printf("[MOTOR] Initializing GPIO10 (STEP), GPIO11 (DIR), GPIO12 (EN)...\n");
+    motor_init();
+    motor_set_dir(true);
 
-        printf("Press a key or else........\n\n");
+    uint32_t step_count = 0;
 
     while (true) {
+        motor_step_once(20); // ~25 steps/sec (slow enough to watch/hear)
+        step_count++;
 
-        // Check 4 a new key press
-        char key = keypad_poll();
-
-        if (key != '\0') {
-            printf("[KEYPAD] Key pressed: %c\n", key);
+        if (step_count % 50 == 0) {
+            printf("[MOTOR] Steps sent: %lu\n", (unsigned long)step_count);
         }
+    }
 
-        // give it some tieme,,,,
-        sleep_ms(2);
-    };
-
-    // this should never run, trust🙏🙏🙏🙏🙏🙏🙏
     return 0;
 }
-
