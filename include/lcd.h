@@ -4,11 +4,9 @@
 #include <stdint.h>
 #include "hardware/i2c.h"
 
-// I NEED TO COME BACK TO THIS BUT I NEED TO SOLDER STUFF BEFORE I CAN SEE IF THIS WILL WORK 
-
-#define LCD_I2C_PORT      i2c0
-#define LCD_SDA_PIN       36
-#define LCD_SCL_PIN       37
+#define LCD_I2C_PORT      i2c1
+#define LCD_SDA_PIN       2
+#define LCD_SCL_PIN       3
 #define LCD_I2C_BAUD_HZ   100000
 
 // Common PCF8574 backpack addresses: 0x27 or 0x3F

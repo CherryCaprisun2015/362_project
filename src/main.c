@@ -6,6 +6,7 @@
 #include "motor.h"
 #include "keypad.h"
 #include "tft.h"
+#include "lcd.h"
 
 #define STEP_PIN 10
 
@@ -42,6 +43,12 @@ int main(void) {
     motor_init();
     keypad_init();
     tft_init();
+
+    uint8_t lcd_addr = lcd_scan_bus();
+    if (lcd_addr != 0) {
+        lcd_init(lcd_addr);
+        lcd_print_at(0, 0, "LCD READY");
+    }
 
     bool running = false;
     bool dir_cw = true;
