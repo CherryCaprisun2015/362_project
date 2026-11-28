@@ -1,144 +1,132 @@
+// Main program entry point - Dual A4988 motors + existing keypad.c + 0x3E I2C LCD
+
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
+#include "board_pins.h"
 #include "motor.h"
 #include "keypad.h"
-#include "tft.h"
 #include "lcd.h"
 
-#define STEP_PIN 10
+static void lcd_render_status(bool m1_run, bool m2_run, char last_key) {
+    char line0[17];
+    char line1[17];
 
-static void tft_show_status(bool running, bool dir_cw, uint32_t half_period_us, uint32_t step_count, char last_key) {
-    uint16_t bg = running ? TFT_NAVY : TFT_BLACK;
-    uint16_t banner = running ? TFT_GREEN : TFT_RED;
-
-    tft_fill_screen(bg);
-    tft_fill_rect(12, 16, 216, 44, banner);
-
-    // Visual status bars for running state, direction, and speed tier
-    tft_fill_rect(12, 76, dir_cw ? 180 : 90, 28, TFT_BLUE);
-
-    uint16_t speed_w = (half_period_us <= 5000) ? 216 : (half_period_us <= 10000) ? 144 : 72;
-    tft_fill_rect(12, 118, speed_w, 28, TFT_YELLOW);
-
-    // Step progress indicator bar
-    uint16_t step_w = (uint16_t)((step_count % 200) * 216u / 200u);
-    tft_fill_rect(12, 162, 216, 24, TFT_WHITE);
-    if (step_w > 0) {
-        tft_fill_rect(12, 162, step_w, 24, TFT_GREEN);
+    if (m1_run && m2_run) {
+        snprintf(line0, sizeof(line0), "BOTH MOTORS: ON ");
+    } else if (!m1_run && !m2_run) {
+        snprintf(line0, sizeof(line0), "BOTH MOTORS: OFF");
+    } else if (m1_run) {
+        snprintf(line0, sizeof(line0), "M1:ON  M2:PAUSED");
+    } else {
+        snprintf(line0, sizeof(line0), "M1:PAUSED M2:ON ");
     }
 
-    (void)last_key;
+    snprintf(line1, sizeof(line1), "M1:%c M2:%c Key:%c ",
+             m1_run ? 'R' : 'P',
+             m2_run ? 'R' : 'P',
+             last_key ? last_key : '-');
+
+    lcd_print_at(0, 0, line0);
+    lcd_print_at(0, 1, line1);
 }
 
 int main(void) {
     stdio_init_all();
     sleep_ms(1500);
 
-    printf("[TEST] Motor + Keypad + SPI TFT\n");
-    printf("[KEYS] 1/2/3=speed, A=CW, B=CCW, 4=run, 5=stop, 6=reset count\n");
-
+    printf("[INIT] Starting Motor 1, Motor 2, Keypad, and 0x3E LCD...\n");
     motor_init();
+    motor_set_dir(true);
+    motor_set_enabled(true);
+
+    motor2_init();
+    motor2_set_dir(true);
+    motor2_set_enabled(true);
+
     keypad_init();
-    tft_init();
 
-    uint8_t lcd_addr = lcd_scan_bus();
-    if (lcd_addr != 0) {
-        lcd_init(lcd_addr);
-        lcd_print_at(0, 0, "LCD READY");
-    }
+    // Keep your existing TFT / sensor / SD init calls here as needed
+    lcd_init(0x3Eu);
 
-    bool running = false;
-    bool dir_cw = true;
-    uint32_t half_period_us = 20000; // ~25 steps/sec to start
-    uint32_t step_count = 0;
-    bool step_pin_high = false;
-    uint64_t last_edge_us = time_us_64();
-    bool ui_dirty = true;
+    bool m1_run = true;
+    bool m2_run = true;
     char last_key = '-';
+    bool ui_dirty = true;
 
-    motor_set_dir(dir_cw);
-    gpio_put(STEP_PIN, 0);
+    const uint32_t step_interval_us = 15000u;
+    const uint32_t pulse_high_us    = 10u;
+
+    uint32_t m1_last_us = time_us_32();
+    uint32_t m2_last_us = time_us_32();
+    bool m1_pin_high = false;
+    bool m2_pin_high = false;
 
     while (true) {
+        uint32_t now_us = time_us_32();
+
         char key = keypad_poll();
         if (key != '\0') {
             last_key = key;
-            switch (key) {
-                case '1':
-                    half_period_us = 20000;
-                    ui_dirty = true;
-                    printf("[SPEED] Slow (~25 steps/s)\n");
-                    break;
-                case '2':
-                    half_period_us = 10000;
-                    ui_dirty = true;
-                    printf("[SPEED] Medium (~50 steps/s)\n");
-                    break;
-                case '3':
-                    half_period_us = 5000;
-                    ui_dirty = true;
-                    printf("[SPEED] Fast (~100 steps/s)\n");
-                    break;
-                case 'A':
-                    dir_cw = true;
-                    motor_set_dir(dir_cw);
-                    ui_dirty = true;
-                    printf("[DIR] CW\n");
-                    break;
-                case 'B':
-                    dir_cw = false;
-                    motor_set_dir(dir_cw);
-                    ui_dirty = true;
-                    printf("[DIR] CCW\n");
-                    break;
-                case '4':
-                    running = true;
-                    last_edge_us = time_us_64();
-                    ui_dirty = true;
-                    printf("[STATE] Running\n");
-                    break;
-                case '5':
-                    running = false;
-                    step_pin_high = false;
-                    gpio_put(STEP_PIN, 0);
-                    ui_dirty = true;
-                    printf("[STATE] Stopped (steps=%lu)\n", (unsigned long)step_count);
-                    break;
-                case '6':
-                    step_count = 0;
-                    ui_dirty = true;
-                    printf("[COUNT] Reset to 0\n");
-                    break;
-                default:
-                    break;
+            if (key == '1') {
+                m1_run = !m1_run;
+                if (!m1_run && m1_pin_high) {
+                    gpio_put(MOTOR1_STEP_PIN, 0);
+                    m1_pin_high = false;
+                }
+            } else if (key == '2') {
+                m2_run = !m2_run;
+                if (!m2_run && m2_pin_high) {
+                    gpio_put(MOTOR2_STEP_PIN, 0);
+                    m2_pin_high = false;
+                }
+            } else if (key == 'A' || key == '3') {
+                m1_run = true;
+                m2_run = true;
+            } else if (key == 'B' || key == '0') {
+                m1_run = false;
+                m2_run = false;
+                gpio_put(MOTOR1_STEP_PIN, 0);
+                gpio_put(MOTOR2_STEP_PIN, 0);
+                m1_pin_high = false;
+                m2_pin_high = false;
+            }
+            ui_dirty = true;
+            printf("[KEY] Pressed '%c' -> M1=%s, M2=%s\n",
+                   key, m1_run ? "RUN" : "PAUSE", m2_run ? "RUN" : "PAUSE");
+        }
+
+        if (m1_run) {
+            uint32_t elapsed1 = now_us - m1_last_us;
+            if (!m1_pin_high && elapsed1 >= step_interval_us) {
+                gpio_put(MOTOR1_STEP_PIN, 1);
+                m1_pin_high = true;
+                m1_last_us = now_us;
+            } else if (m1_pin_high && elapsed1 >= pulse_high_us) {
+                gpio_put(MOTOR1_STEP_PIN, 0);
+                m1_pin_high = false;
             }
         }
 
-        if (running) {
-            uint64_t now = time_us_64();
-            if ((now - last_edge_us) >= half_period_us) {
-                last_edge_us = now;
-                step_pin_high = !step_pin_high;
-                gpio_put(STEP_PIN, step_pin_high ? 1 : 0);
-
-                if (!step_pin_high) {
-                    step_count++;
-                    if (step_count % 50 == 0) {
-                        ui_dirty = true;
-                        printf("[MOTOR] Steps: %lu\n", (unsigned long)step_count);
-                    }
-                }
+        if (m2_run) {
+            uint32_t elapsed2 = now_us - m2_last_us;
+            if (!m2_pin_high && elapsed2 >= step_interval_us) {
+                gpio_put(MOTOR2_STEP_PIN, 1);
+                m2_pin_high = true;
+                m2_last_us = now_us;
+            } else if (m2_pin_high && elapsed2 >= pulse_high_us) {
+                gpio_put(MOTOR2_STEP_PIN, 0);
+                m2_pin_high = false;
             }
         }
 
         if (ui_dirty) {
-            tft_show_status(running, dir_cw, half_period_us, step_count, last_key);
+            lcd_render_status(m1_run, m2_run, last_key);
             ui_dirty = false;
         }
-
-        sleep_ms(1);
     }
+
+    return 0;
 }

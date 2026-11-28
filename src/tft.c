@@ -1,124 +1,123 @@
-
-// Controls the color TFT display through SPI.
-// Handles graphics, text, dealing animations, and status displays.
-
 #include "tft.h"
-#include "board_pins.h"
 #include "pico/stdlib.h"
-#include "hardware/spi.h"
 #include "hardware/gpio.h"
+#include "hardware/spi.h"
 
-static inline void tft_cs_low(void)  { gpio_put(TFT_PIN_CS, 0); }
-static inline void tft_cs_high(void) { gpio_put(TFT_PIN_CS, 1); }
-static inline void tft_dc_cmd(void)  { gpio_put(TFT_PIN_DC, 0); }
-static inline void tft_dc_data(void) { gpio_put(TFT_PIN_DC, 1); }
+#ifndef TFT_SPI_PORT
+#define TFT_SPI_PORT   spi0
+#endif
+#ifndef TFT_SCK_PIN
+#define TFT_SCK_PIN    18u
+#endif
+#ifndef TFT_MOSI_PIN
+#define TFT_MOSI_PIN   19u
+#endif
+#ifndef TFT_CS_PIN
+#define TFT_CS_PIN     17u
+#endif
+#ifndef TFT_RST_PIN
+#define TFT_RST_PIN    16u
+#endif
+#ifndef TFT_DC_PIN
+#define TFT_DC_PIN     20u
+#endif
 
-static void tft_write_cmd(uint8_t cmd) {
-    tft_dc_cmd();
-    tft_cs_low();
+#define TFT_BLACK      0x0000u
+#define TFT_GREEN      0x07E0u
+#define TFT_RED        0xF800u
+
+static void tft_cmd(uint8_t cmd) {
+    gpio_put(TFT_DC_PIN, 0);
+    gpio_put(TFT_CS_PIN, 0);
     spi_write_blocking(TFT_SPI_PORT, &cmd, 1);
-    tft_cs_high();
+    gpio_put(TFT_CS_PIN, 1);
 }
 
-static void tft_write_data(const uint8_t *data, size_t len) {
-    if (len == 0) return;
-    tft_dc_data();
-    tft_cs_low();
+static void tft_data(const uint8_t *data, size_t len) {
+    gpio_put(TFT_DC_PIN, 1);
+    gpio_put(TFT_CS_PIN, 0);
     spi_write_blocking(TFT_SPI_PORT, data, len);
-    tft_cs_high();
-}
-
-static void tft_reset(void) {
-    gpio_put(TFT_PIN_RST, 0);
-    sleep_ms(20);
-    gpio_put(TFT_PIN_RST, 1);
-    sleep_ms(120);
+    gpio_put(TFT_CS_PIN, 1);
 }
 
 static void tft_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
     uint8_t col_buf[4] = {
-        (uint8_t)(x0 >> 8), (uint8_t)(x0 & 0xFF),
-        (uint8_t)(x1 >> 8), (uint8_t)(x1 & 0xFF)
+        (uint8_t)(x0 >> 8), (uint8_t)(x0 & 0xFFu),
+        (uint8_t)(x1 >> 8), (uint8_t)(x1 & 0xFFu)
     };
     uint8_t row_buf[4] = {
-        (uint8_t)(y0 >> 8), (uint8_t)(y0 & 0xFF),
-        (uint8_t)(y1 >> 8), (uint8_t)(y1 & 0xFF)
+        (uint8_t)(y0 >> 8), (uint8_t)(y0 & 0xFFu),
+        (uint8_t)(y1 >> 8), (uint8_t)(y1 & 0xFFu)
     };
+    tft_cmd(0x2Au);
+    tft_data(col_buf, 4);
+    tft_cmd(0x2Bu);
+    tft_data(row_buf, 4);
+    tft_cmd(0x2Cu);
+}
 
-    tft_write_cmd(0x2A); // Column address set
-    tft_write_data(col_buf, sizeof(col_buf));
+static void tft_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color565) {
+    if (w == 0 || h == 0) return;
+    tft_set_window(x, y, (uint16_t)(x + w - 1u), (uint16_t)(y + h - 1u));
+    uint8_t pixel[2] = { (uint8_t)(color565 >> 8), (uint8_t)(color565 & 0xFFu) };
+    uint32_t total = (uint32_t)w * (uint32_t)h;
 
-    tft_write_cmd(0x2B); // Page/row address set
-    tft_write_data(row_buf, sizeof(row_buf));
+    gpio_put(TFT_DC_PIN, 1);
+    gpio_put(TFT_CS_PIN, 0);
+    for (uint32_t i = 0; i < total; i++) {
+        spi_write_blocking(TFT_SPI_PORT, pixel, 2);
+    }
+    gpio_put(TFT_CS_PIN, 1);
+}
 
-    tft_write_cmd(0x2C); // Memory write
+void tft_fill_screen(uint16_t color565) {
+    tft_fill_rect(0, 0, 240u, 320u, color565);
 }
 
 void tft_init(void) {
-    spi_init(TFT_SPI_PORT, 16 * 1000 * 1000);
-    gpio_set_function(TFT_PIN_SCK, GPIO_FUNC_SPI);
-    gpio_set_function(TFT_PIN_MOSI, GPIO_FUNC_SPI);
+    spi_init(TFT_SPI_PORT, 10000000u);
+    gpio_set_function(TFT_SCK_PIN, GPIO_FUNC_SPI);
+    gpio_set_function(TFT_MOSI_PIN, GPIO_FUNC_SPI);
 
-    gpio_init(TFT_PIN_CS);
-    gpio_set_dir(TFT_PIN_CS, GPIO_OUT);
-    gpio_put(TFT_PIN_CS, 1);
+    gpio_init(TFT_CS_PIN);
+    gpio_set_dir(TFT_CS_PIN, GPIO_OUT);
+    gpio_put(TFT_CS_PIN, 1);
 
-    gpio_init(TFT_PIN_DC);
-    gpio_set_dir(TFT_PIN_DC, GPIO_OUT);
-    gpio_put(TFT_PIN_DC, 0);
+    gpio_init(TFT_DC_PIN);
+    gpio_set_dir(TFT_DC_PIN, GPIO_OUT);
+    gpio_put(TFT_DC_PIN, 0);
 
-    gpio_init(TFT_PIN_RST);
-    gpio_set_dir(TFT_PIN_RST, GPIO_OUT);
-    gpio_put(TFT_PIN_RST, 1);
+    gpio_init(TFT_RST_PIN);
+    gpio_set_dir(TFT_RST_PIN, GPIO_OUT);
 
-    tft_reset();
-
-    tft_write_cmd(0x01); // Software reset
-    sleep_ms(120);
-
-    tft_write_cmd(0x11); // Sleep out
-    sleep_ms(120);
-
-    uint8_t pixfmt = 0x55; // 16-bit RGB565
-    tft_write_cmd(0x3A);
-    tft_write_data(&pixfmt, 1);
-
-    uint8_t madctl = 0x48; // Memory access control
-    tft_write_cmd(0x36);
-    tft_write_data(&madctl, 1);
-
-    tft_write_cmd(0x29); // Display ON
+    gpio_put(TFT_RST_PIN, 0);
     sleep_ms(20);
+    gpio_put(TFT_RST_PIN, 1);
+    sleep_ms(120);
+
+    tft_cmd(0x01u);
+    sleep_ms(120);
+
+    tft_cmd(0x3Au);
+    uint8_t pixfmt = 0x55u;
+    tft_data(&pixfmt, 1);
+
+    tft_cmd(0x36u);
+    uint8_t madctl = 0x48u;
+    tft_data(&madctl, 1);
+
+    tft_cmd(0x11u);
+    sleep_ms(120);
+
+    tft_cmd(0x29u);
+    sleep_ms(50);
+
+    tft_fill_screen(TFT_BLACK);
 }
 
-void tft_draw_pixel(uint16_t x, uint16_t y, uint16_t color) {
-    if (x >= TFT_WIDTH || y >= TFT_HEIGHT) return;
-    tft_set_window(x, y, x, y);
-    uint8_t px[2] = { (uint8_t)(color >> 8), (uint8_t)(color & 0xFF) };
-    tft_write_data(px, sizeof(px));
-}
-
-void tft_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
-    if (x >= TFT_WIDTH || y >= TFT_HEIGHT || w == 0 || h == 0) return;
-    if (x + w > TFT_WIDTH)  w = TFT_WIDTH - x;
-    if (y + h > TFT_HEIGHT) h = TFT_HEIGHT - y;
-
-    tft_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
-
-    uint8_t hi = (uint8_t)(color >> 8);
-    uint8_t lo = (uint8_t)(color & 0xFF);
-    uint8_t line[TFT_WIDTH * 2];
-
-    for (uint16_t i = 0; i < w; i++) {
-        line[i * 2] = hi;
-        line[i * 2 + 1] = lo;
-    }
-
-    for (uint16_t r = 0; r < h; r++) {
-        tft_write_data(line, (size_t)w * 2);
-    }
-}
-
-void tft_fill_screen(uint16_t color) {
-    tft_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, color);
+void tft_show_motor_status(bool m1_run, bool m2_run, char last_key) {
+    (void)last_key;
+    tft_fill_screen(TFT_BLACK);
+    tft_fill_rect(20u, 40u, 200u, 80u, m1_run ? TFT_GREEN : TFT_RED);
+    tft_fill_rect(20u, 160u, 200u, 80u, m2_run ? TFT_GREEN : TFT_RED);
 }

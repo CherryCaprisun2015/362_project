@@ -1,9 +1,28 @@
+// Controls the 16x2 character LCD through I2C.
+// Handles initialization, cursor positioning, and text output.
+
 #include <stdio.h>
 #include "lcd.h"
 #include "board_pins.h"
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
+
+#ifndef LCD_I2C_PORT
+#define LCD_I2C_PORT    i2c1
+#endif
+
+#ifndef LCD_SDA_PIN
+#define LCD_SDA_PIN     2u
+#endif
+
+#ifndef LCD_SCL_PIN
+#define LCD_SCL_PIN     3u
+#endif
+
+#ifndef LCD_I2C_BAUD_HZ
+#define LCD_I2C_BAUD_HZ 100000u
+#endif
 
 // Native I2C control bytes for AiP31068L / similar controllers at 0x3E
 #define AIP_CTRL_CMD    0x00u
@@ -56,7 +75,8 @@ uint8_t lcd_scan_bus(void) {
     lcd_bus_ensure_init();
     uint8_t found = 0;
 
-    printf("[I2C] Scanning bus on SDA=%d, SCL=%d...\n", LCD_SDA_PIN, LCD_SCL_PIN);
+    printf("[I2C] Scanning bus on SDA=%u, SCL=%u...\n",
+           (unsigned)LCD_SDA_PIN, (unsigned)LCD_SCL_PIN);
     for (uint8_t addr = 0x08u; addr <= 0x77u; addr++) {
         uint8_t dummy = 0;
         int ret = i2c_write_blocking_until(
@@ -86,8 +106,7 @@ void lcd_init(uint8_t addr) {
     lcd_bus_ensure_init();
 
     sleep_ms(50);
-    // Function set: 2 lines, 5x8 font (0x38 = 8-bit interface, 2 lines, 5x8)
-    lcd_cmd(0x38u);
+    lcd_cmd(0x38u); // Function set: 2 lines, 5x8 font
     sleep_us(100);
     lcd_cmd(0x0Cu); // Display ON, cursor OFF, blink OFF
     sleep_us(100);
